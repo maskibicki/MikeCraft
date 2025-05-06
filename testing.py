@@ -12,7 +12,7 @@ from pyglet.graphics import TextureGroup
 from pyglet.window import key, mouse
 
 TICKS_PER_SEC = 60
-
+WORLD_BIGGNESS = 500
 # Size of sectors used to ease block loading.
 SECTOR_SIZE = 16
 DEFAULT_WALK_SPEED = 5
@@ -80,11 +80,13 @@ TEXTURE_PATH = 'texture.png'
 GRASS = tex_coords((1, 0), (0, 1), (0, 0))
 SAND = tex_coords((1, 1), (1, 1), (1, 1))
 BRICK = tex_coords((2, 0), (2, 0), (2, 0))
-STONE = tex_coords((2, 1), (2, 1), (2, 1))
+BEDROCK = tex_coords((2, 1), (2, 1), (2, 1))
 WOOD = tex_coords((3, 0), (3, 0), (3, 1))
 PLANKS = tex_coords((1,2), (1,2), (0,2))
 LEAVES = tex_coords((2,2), (2,2), (2,2))
-
+DIRT = tex_coords((0,1), (0,1), (0,1))
+STONE = tex_coords((3,2), (3,2), (3,2))
+DIAMOND_BLOCK= tex_coords((0,3), (0,3), (0,3))
 FACES = [
     ( 0, 1, 0),
     ( 0,-1, 0),
@@ -159,25 +161,217 @@ class Model(object):
 
         self._initialize()
 
+    def generate_tree(self, x, z):
+        """ Generate a tree at the specified x, z position.
+        
+        Parameters
+        ----------
+        x, z : int
+            The x, z coordinates to place the tree.
+        """
+        # Find the highest block at this x, z position
+        y = 0
+        for dy in range(-1, -10, -1):
+            position = (x, dy, z)
+            if position in self.world:
+                y = dy + 1
+                break
+        
+        if y == 0:  # If no ground found, don't create a tree
+            return
+        
+        # Create the trunk (4-5 blocks tall)
+        trunk_height = random.randint(4, 5)
+        for dy in range(trunk_height):
+            self.add_block((x, y + dy, z), WOOD, immediate=False)
+        
+        # Create the leaves (a 3x3x3 cube with some randomness)
+        leaf_y_start = y + trunk_height - 2
+        for ly in range(3):  # 3 layers of leaves
+            leaf_radius = 2 if ly < 2 else 1  # Top layer has smaller radius
+            for lx in range(-leaf_radius, leaf_radius + 1):
+                for lz in range(-leaf_radius, leaf_radius + 1):
+                    # Skip corners sometimes for a more natural look
+                    if abs(lx) == abs(lz) == leaf_radius and random.random() < 0.5:
+                        continue
+                    # Don't place leaves where the trunk is
+                    if lx == 0 and lz == 0 and ly < 2:
+                        continue
+                    self.add_block((x + lx, leaf_y_start + ly, z + lz), LEAVES, immediate=False)
+    
+    def generate_tree_variant(self, x, z, variant=0):
+        """ Generate different types of trees for variety
+        
+        Parameters
+        ----------
+        x, z : int
+            The x, z coordinates to place the tree.
+        variant : int
+            Tree variant (0=normal, 1=tall, 2=wide)
+        """
+        # Find the highest block at this x, z position
+        y = 0
+        for dy in range(-1, -10, -1):
+            position = (x, dy, z)
+            if position in self.world:
+                y = dy + 1
+                break
+        
+        if y == 0:  # If no ground found, don't create a tree
+            return
+        
+        # Create the trunk with height based on variant
+        if variant == 1:  # Tall tree
+            trunk_height = random.randint(6, 8)
+        else:
+            trunk_height = random.randint(4, 5)
+            
+        for dy in range(trunk_height):
+            self.add_block((x, y + dy, z), WOOD, immediate=False)
+        
+        # Create the leaves based on variant
+        leaf_y_start = y + trunk_height - 2
+        
+        if variant == 2:  # Wide tree
+            leaf_layers = 3
+            max_radius = 3
+        elif variant == 1:  # Tall tree
+            leaf_layers = 4
+            max_radius = 2
+        else:  # Normal tree
+            leaf_layers = 3
+            max_radius = 2
+            
+        for ly in range(leaf_layers):
+            # Top layer has smaller radius
+            leaf_radius = max_radius if ly < leaf_layers - 1 else max_radius - 1
+            
+            for lx in range(-leaf_radius, leaf_radius + 1):
+                for lz in range(-leaf_radius, leaf_radius + 1):
+                    # Skip corners sometimes for a more natural look
+                    if abs(lx) == abs(lz) == leaf_radius and random.random() < 0.5:
+                        continue
+                    # Don't place leaves where the trunk is
+                    if lx == 0 and lz == 0 and ly < leaf_layers - 1:
+                        continue
+                    self.add_block((x + lx, leaf_y_start + ly, z + lz), LEAVES, immediate=False)
+    
+    def is_tree_position_valid(self, x, z, tree_positions, min_distance=5):
+        """ Check if a position is valid for a new tree
+        
+        Parameters
+        ----------
+        x, z : int
+            Position to check
+        tree_positions : list of tuples
+            List of existing tree positions (x, z)
+        min_distance : int
+            Minimum distance required between trees
+            
+        Returns
+        -------
+        bool
+            True if position is valid, False otherwise
+        """
+        for tx, tz in tree_positions:
+            # Calculate distance between trees
+            distance = math.sqrt((x - tx)**2 + (z - tz)**2)
+            if distance < min_distance:
+                return False
+        return True
+    
+    def generate_trees(self, num_trees=50):
+        """ Generate multiple trees in the world.
+        
+        Parameters
+        ----------
+        num_trees : int
+            Number of trees to generate.
+        """
+        n = WORLD_BIGGNESS  # Same as world size
+        buffer = 10  # Buffer from world edge
+        
+        # Create forest clusters for more natural distribution
+        num_clusters = 5
+        clusters = []
+        
+        # Track all tree positions to ensure minimum distance
+        tree_positions = []
+        
+        # Define some forest cluster centers
+        for _ in range(num_clusters):
+            cx = random.randint(-(n-buffer-15), (n-buffer-15))
+            cz = random.randint(-(n-buffer-15), (n-buffer-15))
+            # Make sure clusters aren't too close to origin
+            if abs(cx) < 20 and abs(cz) < 20:
+                continue
+            clusters.append((cx, cz))
+        
+        # Generate trees, with more around the clusters
+        attempts = 0
+        trees_placed = 0
+        max_attempts = num_trees * 10  # Prevent infinite loops
+        
+        while trees_placed < num_trees and attempts < max_attempts:
+            attempts += 1
+            
+            # Determine if this tree should be in a cluster
+            if random.random() < 0.8 and clusters:  # 80% in clusters
+                # Choose a random cluster
+                cx, cz = random.choice(clusters)
+                # Position with some randomness around the cluster center
+                radius = random.randint(5, 15)
+                angle = random.random() * 2 * math.pi
+                x = int(cx + radius * math.cos(angle))
+                z = int(cz + radius * math.sin(angle))
+                
+                # Keep within world bounds
+                x = max(-(n-buffer), min(n-buffer, x))
+                z = max(-(n-buffer), min(n-buffer, z))
+            else:
+                # Random position for standalone trees
+                x = random.randint(-(n-buffer), (n-buffer))
+                z = random.randint(-(n-buffer), (n-buffer))
+            
+            # Don't place trees too close to origin
+            if abs(x) < 10 and abs(z) < 10:
+                continue
+            
+            # Ensure trees aren't too close to each other
+            if not self.is_tree_position_valid(x, z, tree_positions, min_distance=5):
+                continue
+                
+            # Position is valid, add to tree positions list
+            tree_positions.append((x, z))
+            
+            # Select a tree variant (normal, tall, or wide)
+            variant = random.choices([0, 1, 2], weights=[0.7, 0.2, 0.1])[0]
+            self.generate_tree_variant(x, z, variant)
+            trees_placed += 1
+    
     def _initialize(self):
         """ Initialize the world by placing all the blocks.
-
+    
         """
-        n = 80  # 1/2 width and height of the world
+        n = WORLD_BIGGNESS  # 1/2 width and height of the world
         s = 1  # step size
         y = 0  # initial y height
         for x in xrange(-n, n + 1, s):
             for z in xrange(-n, n + 1, s):
-                # create a layer of stone and grass everywhere.
+                # create a layer of bedrock and grass everywhere.
                 self.add_block((x, y - 2, z), GRASS, immediate=False)
-                self.add_block((x, y - 3, z), STONE, immediate=False)
+                self.add_block((x, y - 3, z), DIRT, immediate=False)
+                self.add_block((x, y - 4, z), STONE, immediate=False)
+                self.add_block((x, y - 5, z), STONE, immediate=False)
+                self.add_block((x, y - 6, z), STONE, immediate=False)
+                self.add_block((x, y - 7, z), BEDROCK, immediate=False)
                 if x in (-n, n) or z in (-n, n):
                     # create outer walls.
                     for dy in xrange(-2, 3):
-                        self.add_block((x, y + dy, z), STONE, immediate=False)
-
+                        self.add_block((x, y + dy, z), BEDROCK, immediate=False)
+    
         # generate the hills randomly
-        o = n - 10
+        o = WORLD_BIGGNESS - 10
         for _ in xrange(120):
             a = random.randint(-o, o)  # x position of the hill
             b = random.randint(-o, o)  # z position of the hill
@@ -185,7 +379,7 @@ class Model(object):
             h = random.randint(1, 6)  # height of the hill
             s = random.randint(4, 8)  # 2 * s is the side length of the hill
             d = 1  # how quickly to taper off the hills
-            t = random.choice([GRASS, SAND, BRICK])
+            t = random.choice([GRASS])
             for y in xrange(c, c + h):
                 for x in xrange(a - s, a + s + 1):
                     for z in xrange(b - s, b + s + 1):
@@ -194,7 +388,10 @@ class Model(object):
                         if (x - 0) ** 2 + (z - 0) ** 2 < 5 ** 2:
                             continue
                         self.add_block((x, y, z), t, immediate=False)
-                s -= d  # decrement side length so hills taper off
+                s -= d  # decrement side length so hills taper off'''
+        
+        # Generate trees across the landscape
+        self.generate_trees(7500)  # Increased number of trees for a denser forest
 
     def hit_test(self, position, vector, max_distance=8):
         """ Line of sight search from current position. If a block is
@@ -477,7 +674,7 @@ class Window(pyglet.window.Window):
         self.dy = 0
 
         # A list of blocks the player can place. Hit num keys to cycle.
-        self.inventory = [BRICK, GRASS, SAND, WOOD, PLANKS]
+        self.inventory = [BRICK, GRASS, SAND, WOOD, PLANKS, LEAVES, STONE, DIAMOND_BLOCK]
 
         # The current block the user can place. Hit num keys to cycle.
         self.block = self.inventory[0]
@@ -687,7 +884,7 @@ class Window(pyglet.window.Window):
                     self.model.add_block(previous, self.block)
             elif button == pyglet.window.mouse.LEFT and block:
                 texture = self.model.world[block]
-                if texture != STONE:
+                if texture != BEDROCK:
                     self.model.remove_block(block)
         else:
             self.set_exclusive_mouse(True)
@@ -736,7 +933,9 @@ class Window(pyglet.window.Window):
             self.flying_speed = DEFAULT_FLY_SPEED * 2
         elif symbol == key.SPACE:
             if self.dy == 0:
+                # Normal jump when on the ground
                 self.dy = JUMP_SPEED
+
 
         elif symbol == key.ESCAPE:
             self.set_exclusive_mouse(False)
@@ -855,7 +1054,6 @@ class Window(pyglet.window.Window):
             pyglet.clock.get_fps(), x, y, z,
             len(self.model._shown), len(self.model.world))
         self.label.draw()
-
     def draw_reticle(self):
         """ Draw the crosshairs in the center of the screen.
 
@@ -903,7 +1101,7 @@ def setup():
 
 
 def main():
-    window = Window(width=800, height=600, caption='Pyglet', resizable=True)
+    window = Window(width=800, height=600, caption='MikeCraft', resizable=True)
     # Hide the mouse cursor and prevent the mouse from leaving the window.
     window.set_exclusive_mouse(True)
     setup()
@@ -911,4 +1109,5 @@ def main():
 
 
 if __name__ == '__main__':
+
     main()
