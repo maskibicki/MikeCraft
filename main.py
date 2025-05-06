@@ -1054,7 +1054,6 @@ class Window(pyglet.window.Window):
             pyglet.clock.get_fps(), x, y, z,
             len(self.model._shown), len(self.model.world))
         self.label.draw()
-
     def draw_reticle(self):
         """ Draw the crosshairs in the center of the screen.
 
