@@ -35,6 +35,8 @@ python main.py
     - 4: wood
     - 5: planks
     - 6: leaves
+    - 7: Stone
+    - 8: Diamond Block
 - Mouse left-click: remove block
 - Mouse right-click: create block
 
